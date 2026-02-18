@@ -1,3 +1,6 @@
+cd ~/Proto_Weather_2026 || exit 1
+
+sudo tee conf_weather.sh > /dev/null <<'EOF'
 #!/usr/bin/env bash
 
 # Forzar bash aunque lo lancen con sh
@@ -116,3 +119,8 @@ echo ""
 echo "✅ Script finalizado."
 echo "⚠️ Si es la primera vez que habilitas SPI, reinicia antes de repetir el test:"
 echo "   sudo reboot"
+EOF
+
+sudo chmod +x conf_weather.sh
+file conf_weather.sh
+sudo bash conf_weather.sh
