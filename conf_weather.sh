@@ -17,7 +17,7 @@ echo " - Habilitar SPI"
 echo " - Clonar repositorio Waveshare e-Paper"
 echo " - Localizar libreria waveshare_epd"
 echo " - Verificar driver 2in13"
-echo " - Ejecutar test de pantalla e-ink"
+echo " - Ejecutar test de pantalla e-ink (auto-deteccion)"
 
 # Root check
 if [ "${EUID:-0}" -ne 0 ]; then
@@ -28,6 +28,7 @@ fi
 
 REAL_USER="${SUDO_USER:-pi}"
 REAL_HOME="$(eval echo ~"${REAL_USER}")"
+EPAPER_DIR="${REAL_HOME}/e-Paper"
 
 # 1) Dependencias (sin upgrade completo)
 echo "Instalando dependencias..."
@@ -74,65 +75,58 @@ sudo -u "${REAL_USER}" bash -lc "
   fi
 "
 
-# 4) Localizar waveshare_epd de forma automatica
-echo "Buscando libreria waveshare_epd dentro de ${REAL_HOME}/e-Paper ..."
-WAVESHARE_EPD_DIR="$(sudo -u "${REAL_USER}" bash -lc "cd \"${REAL_HOME}/e-Paper\" && find . -type d -name waveshare_epd -print -quit" || true)"
+# 4) Localizar waveshare_epd
+echo "Buscando libreria waveshare_epd dentro de ${EPAPER_DIR} ..."
+WAVESHARE_EPD_DIR_REL="$(sudo -u "${REAL_USER}" bash -lc "cd \"${EPAPER_DIR}\" && find . -type d -name waveshare_epd -print -quit" || true)"
 
-if [ -z "${WAVESHARE_EPD_DIR}" ]; then
-  echo "ERROR: No se encontro ninguna carpeta llamada 'waveshare_epd' dentro de ${REAL_HOME}/e-Paper"
-  echo "Sugerencia: revisa la estructura con:"
-  echo "  ls -la ${REAL_HOME}/e-Paper"
+if [ -z "${WAVESHARE_EPD_DIR_REL}" ]; then
+  echo "ERROR: No se encontro ninguna carpeta llamada 'waveshare_epd' dentro de ${EPAPER_DIR}"
   exit 1
 fi
 
-# Convertir a ruta absoluta
-WAVESHARE_EPD_DIR_ABS="${REAL_HOME}/e-Paper/${WAVESHARE_EPD_DIR#./}"
+WAVESHARE_EPD_DIR="${EPAPER_DIR}/${WAVESHARE_EPD_DIR_REL#./}"
 echo "OK: waveshare_epd encontrada en:"
-echo "  ${WAVESHARE_EPD_DIR_ABS}"
+echo "  ${WAVESHARE_EPD_DIR}"
 
-# 5) Comprobar driver 2in13
+# 5) Verificar driver 2in13
 echo "Comprobando archivos del modelo 2in13..."
-if ls "${WAVESHARE_EPD_DIR_ABS}" | grep -q "2in13"; then
+if ls "${WAVESHARE_EPD_DIR}" | grep -qi "2in13"; then
   echo "Driver 2in13 encontrado."
 else
-  echo "AVISO: No se encontraron archivos 2in13 en ${WAVESHARE_EPD_DIR_ABS}"
+  echo "AVISO: No se encontraron archivos 2in13 en ${WAVESHARE_EPD_DIR}"
   echo "Contenido:"
-  ls -la "${WAVESHARE_EPD_DIR_ABS}" || true
+  ls -la "${WAVESHARE_EPD_DIR}" || true
 fi
 
-# 6) Localizar carpeta examples y ejecutar test 2in13 V3 si existe
+# 6) Auto-deteccion del script de test para 2in13
 echo ""
-echo "Buscando carpeta 'examples' para ejecutar el test..."
-EXAMPLES_DIR="$(sudo -u "${REAL_USER}" bash -lc "cd \"${REAL_HOME}/e-Paper\" && find . -type d -name examples -print -quit" || true)"
+echo "Buscando script de test para 2in13..."
+TEST_REL="$(sudo -u "${REAL_USER}" bash -lc "cd \"${EPAPER_DIR}\" && find . -type f \\( -iname 'epd_2in13*_test.py' -o -iname '*2in13*test*.py' \\) -print | head -n 1" || true)"
 
-if [ -z "${EXAMPLES_DIR}" ]; then
-  echo "ERROR: No se encontro ninguna carpeta 'examples' dentro de ${REAL_HOME}/e-Paper"
-  exit 1
+if [ -z "${TEST_REL}" ]; then
+  echo "AVISO: No se encontro ningun test tipo epd_2in13*_test.py en ${EPAPER_DIR}"
+  echo "Puedes listar tests disponibles con:"
+  echo "  cd ${EPAPER_DIR} && find . -type f -iname '*test*.py' | head -n 50"
+  exit 0
 fi
 
-EXAMPLES_DIR_ABS="${REAL_HOME}/e-Paper/${EXAMPLES_DIR#./}"
-TEST_SCRIPT="epd_2in13_V3_test.py"
+TEST_ABS="${EPAPER_DIR}/${TEST_REL#./}"
+echo "OK: Test encontrado:"
+echo "  ${TEST_ABS}"
 
-echo "Carpeta examples encontrada en:"
-echo "  ${EXAMPLES_DIR_ABS}"
+# Ejecutar el test desde su carpeta
+TEST_DIR="$(dirname "${TEST_ABS}")"
+TEST_FILE="$(basename "${TEST_ABS}")"
 
-if [ -f "${EXAMPLES_DIR_ABS}/${TEST_SCRIPT}" ]; then
-  echo "Ejecutando test ${TEST_SCRIPT}..."
-  sudo -u "${REAL_USER}" bash -lc "
-    set -e
-    cd \"${EXAMPLES_DIR_ABS}\"
-    python3 \"${TEST_SCRIPT}\"
-  "
-  echo ""
-  echo "Si la pantalla se ha actualizado, todo correcto."
-else
-  echo "AVISO: No se encontro ${TEST_SCRIPT} en ${EXAMPLES_DIR_ABS}"
-  echo "Scripts disponibles:"
-  ls -1 "${EXAMPLES_DIR_ABS}" | head -n 50 | sed 's/^/ - /'
-  echo ""
-  echo "Revisa la version exacta de tu pantalla (V2/V3/V4) y ejecuta el script adecuado."
-fi
+echo "Ejecutando test..."
+sudo -u "${REAL_USER}" bash -lc "
+  set -e
+  cd \"${TEST_DIR}\"
+  python3 \"${TEST_FILE}\"
+"
 
+echo ""
+echo "Si la pantalla se ha actualizado, todo correcto."
 echo ""
 echo "Script finalizado."
 echo "Si es la primera vez que habilitas SPI, reinicia:"
