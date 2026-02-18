@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 
-# 🔒 Si alguien lo ejecuta con sh (dash/ash), nos relanzamos con bash
+# Forzar bash aunque lo lancen con sh
 if [ -z "${BASH_VERSION:-}" ]; then
   echo "🔁 Este script requiere bash. Reiniciando con bash..."
   exec /usr/bin/env bash "$0" "$@"
@@ -8,175 +8,111 @@ fi
 
 set -euo pipefail
 
-###############################################################################
-# conf_weather.sh
-# Configuración completa para Proto_Weather_2026 (Raspberry Pi OS / Debian)
-# - Instala dependencias necesarias
-# - Habilita SPI (compatible con Trixie: /boot/firmware/config.txt)
-# - Clona Waveshare e-Paper
-# - Comprueba driver 2in13
-# - Ejecuta test de pantalla e-ink 2.13" V3
-###############################################################################
+echo "🌦️ Configurando entorno Weather en Raspberry Pi:"
+echo "   - Instalar dependencias Python"
+echo "   - Habilitar SPI"
+echo "   - Clonar repositorio Waveshare e-Paper"
+echo "   - Verificar driver 2in13"
+echo "   - Ejecutar test de pantalla e-ink"
 
-log()  { echo -e "✅ $*"; }
-info() { echo -e "ℹ️  $*"; }
-warn() { echo -e "⚠️  $*"; }
-err()  { echo -e "❌ $*" >&2; }
-
-# 1️⃣ Root check
+# 1) Root
 if [ "${EUID:-0}" -ne 0 ]; then
-  err "Ejecuta este script con sudo:"
-  echo "   sudo bash conf_weather.sh"
+  echo "❌ Ejecuta con sudo:"
+  echo "   sudo ./conf_weather.sh"
   exit 1
 fi
 
+# Usuario real (para trabajar en su HOME)
 REAL_USER="${SUDO_USER:-root}"
 REAL_HOME="$(eval echo ~"${REAL_USER}")"
 
-echo "🌦️ conf_weather.sh — Configuración completa de Proto Weather 2026"
-info "Usuario objetivo: ${REAL_USER}"
-info "HOME objetivo: ${REAL_HOME}"
-echo
-
-# 2️⃣ Dependencias (sin actualizar sistema)
-info "Instalando dependencias..."
-apt update
+# 2) Instalar dependencias (SIN actualizar el SO)
+echo "📦 Instalando dependencias..."
 apt install -y python3-requests python3-pil fonts-dejavu-core git
-log "Dependencias instaladas."
-echo
 
-# 3️⃣ Habilitar SPI (Trixie/Bookworm)
-enable_spi_config_txt() {
-  local cfg=""
+# 3) Habilitar SPI usando raspi-config
+if command -v raspi-config >/dev/null 2>&1; then
+  echo "🛠️ Habilitando SPI vía raspi-config..."
+  raspi-config nonint do_spi 0
+else
+  echo "⚠️ raspi-config no disponible. Aplicando fallback..."
 
-  if [ -f "/boot/firmware/config.txt" ]; then
-    cfg="/boot/firmware/config.txt"
-  elif [ -f "/boot/config.txt" ]; then
-    cfg="/boot/config.txt"
-  else
-    err "No se encontró config.txt en /boot/firmware ni en /boot."
-    return 1
+  BOOTDIR="/boot/firmware"
+  if [ ! -d "$BOOTDIR" ]; then
+    BOOTDIR="/boot"
   fi
 
-  info "Habilitando SPI en: ${cfg}"
+  CONFIG_FILE="$BOOTDIR/config.txt"
+  USERCFG="$BOOTDIR/usercfg.txt"
 
-  if grep -qE '^[[:space:]]*dtparam=spi=off[[:space:]]*$' "$cfg"; then
-    sed -i 's/^[[:space:]]*dtparam=spi=off[[:space:]]*$/dtparam=spi=on/' "$cfg"
-    log "Cambiado dtparam=spi=off → dtparam=spi=on"
-  elif grep -qE '^[[:space:]]*dtparam=spi=on[[:space:]]*$' "$cfg"; then
-    log "SPI ya estaba activado."
-  else
-    {
-      echo ""
-      echo "# Habilitar SPI (añadido por conf_weather.sh)"
-      echo "dtparam=spi=on"
-    } >> "$cfg"
-    log "Añadido dtparam=spi=on"
+  cp -a "$CONFIG_FILE" "${CONFIG_FILE}.bak.$(date +%Y%m%d-%H%M%S)"
+
+  touch "$USERCFG"
+  cp -a "$USERCFG" "${USERCFG}.bak.$(date +%Y%m%d-%H%M%S)" 2>/dev/null || true
+
+  sed -i 's/^dtparam=spi=off/#dtparam=spi=off/' "$CONFIG_FILE" || true
+  sed -i 's/^dtparam=spi=off/#dtparam=spi=off/' "$USERCFG" || true
+
+  if ! grep -q '^dtparam=spi=on$' "$USERCFG"; then
+    echo "dtparam=spi=on" >> "$USERCFG"
   fi
+fi
 
-  # raspi-config si existe (no rompe nada si ya estaba)
-  if command -v raspi-config >/dev/null 2>&1; then
-    info "Aplicando raspi-config do_spi..."
-    set +e
-    raspi-config nonint do_spi 0 >/dev/null 2>&1
-    set -e
-    log "raspi-config aplicado (o ya estaba)."
-  fi
+# 4) Cargar módulos
+echo "🧩 Cargando módulos SPI..."
+modprobe spi_bcm2835 2>/dev/null || true
+modprobe spidev 2>/dev/null || true
 
-  info "Cargando módulos SPI..."
-  modprobe spi_bcm2835 >/dev/null 2>&1 || true
-  modprobe spidev >/dev/null 2>&1 || true
+# 5) Verificación SPI
+echo "🔎 Verificando dispositivos SPI..."
+ls /dev/spidev* 2>/dev/null || echo "Aún no visibles (requiere reboot)"
 
-  mkdir -p /etc/modules-load.d
-  cat > /etc/modules-load.d/spi.conf <<'EOF'
-# Módulos SPI (añadido por conf_weather.sh)
-spi_bcm2835
-spidev
-EOF
-
-  log "SPI configurado (puede requerir reinicio)."
-}
-
-enable_spi_config_txt
-echo
-
-# 4️⃣ Clonar Waveshare e-Paper
-info "Clonando/actualizando Waveshare e-Paper en ${REAL_HOME}..."
+# 6) Clonar repositorio Waveshare e-Paper (en HOME del usuario real)
+echo "📥 Clonando repositorio Waveshare e-Paper..."
 sudo -u "${REAL_USER}" bash -lc "
   cd \"${REAL_HOME}\"
   if [ ! -d \"e-Paper\" ]; then
     git clone https://github.com/waveshare/e-Paper.git
   else
+    echo \"📁 La carpeta e-Paper ya existe, actualizando...\"
     cd e-Paper
     git pull
   fi
 "
-log "Repositorio Waveshare preparado."
-echo
 
-# 5️⃣ Comprobación driver 2in13
-info "Comprobando driver 2in13..."
-WAVESHARE_DRIVER_DIR=\"${REAL_HOME}/e-Paper/RaspberryPi_JetsonNano/python/lib/waveshare_epd\"
+# 7) Comprobación del modelo 2in13
+echo "🔎 Comprobando archivos del modelo 2in13..."
+EPD_PATH="${REAL_HOME}/e-Paper/RaspberryPi_JetsonNano/python/lib/waveshare_epd"
 
-if [ ! -d \"${WAVESHARE_DRIVER_DIR}\" ]; then
-  err \"No existe el directorio esperado:\"
-  err \"${WAVESHARE_DRIVER_DIR}\"
-  exit 1
-fi
-
-if ls \"${WAVESHARE_DRIVER_DIR}\" | grep -q \"2in13\"; then
-  log \"Driver 2in13 encontrado.\"
+if [ -d "$EPD_PATH" ]; then
+  ls "$EPD_PATH" | grep 2in13 || echo "⚠️ No se encontraron archivos 2in13 en waveshare_epd"
 else
-  err \"No se encontró '2in13' en ${WAVESHARE_DRIVER_DIR}\"
-  ls -la \"${WAVESHARE_DRIVER_DIR}\" || true
-  exit 1
-fi
-echo
-
-# 6️⃣ Test e-ink
-info \"Ejecutando test de pantalla e-ink 2in13 V3...\"
-EXAMPLES_DIR=\"${REAL_HOME}/e-Paper/RaspberryPi_JetsonNano/python/examples\"
-TEST_SCRIPT=\"epd_2in13_V3_test.py\"
-
-if [ ! -d \"${EXAMPLES_DIR}\" ]; then
-  err \"No existe el directorio de ejemplos: ${EXAMPLES_DIR}\"
-  exit 1
+  echo "❌ No se encontró la ruta $EPD_PATH"
 fi
 
-if [ ! -f \"${EXAMPLES_DIR}/${TEST_SCRIPT}\" ]; then
-  err \"No se encontró el script de test: ${EXAMPLES_DIR}/${TEST_SCRIPT}\"
-  echo \"Scripts disponibles:\"
-  ls -1 \"${EXAMPLES_DIR}\" | sed 's/^/ - /'
-  exit 1
-fi
+# 8) Test automático pantalla e-ink 2in13 V3
+echo ""
+echo "🧪 Ejecutando test de la pantalla e-ink 2in13 V3..."
 
-set +e
-sudo -u \"${REAL_USER}\" bash -lc \"
-  cd \\\"${EXAMPLES_DIR}\\\"
-  python3 \\\"${TEST_SCRIPT}\\\"
-\"
-TEST_RC=$?
-set -e
+EXAMPLES_PATH="${REAL_HOME}/e-Paper/RaspberryPi_JetsonNano/python/examples"
 
-if [ \"${TEST_RC}\" -eq 0 ]; then
-  log \"Test ejecutado correctamente.\"
-  echo \"Si la pantalla se ha actualizado → ✔️ todo correcto.\"
+if [ -d "$EXAMPLES_PATH" ]; then
+  if [ -f "${EXAMPLES_PATH}/epd_2in13_V3_test.py" ]; then
+    sudo -u "${REAL_USER}" bash -lc "
+      cd \"${EXAMPLES_PATH}\"
+      python3 epd_2in13_V3_test.py
+    "
+    echo ""
+    echo "✔️ Si la pantalla se ha actualizado, todo funciona correctamente."
+  else
+    echo "⚠️ No se encontró epd_2in13_V3_test.py"
+    echo "Revisa la versión exacta de tu pantalla (V2, V3, V4...)."
+  fi
 else
-  warn \"El test devolvió error (${TEST_RC}).\"
-  warn \"Si SPI se acaba de activar, reinicia y vuelve a probar.\"
+  echo "❌ No se encontró la carpeta de ejemplos."
 fi
-echo
 
-# 7️⃣ Verificación /dev/spidev*
-if ls /dev/spidev* >/dev/null 2>&1; then
-  log \"Dispositivos SPI detectados:\"
-  ls /dev/spidev*
-else
-  warn \"No se detectan /dev/spidev* todavía.\"
-  warn \"Probablemente necesites reiniciar.\"
-fi
-echo
-
-log \"Configuración completada.\"
-echo \"Si SPI se acaba de activar, reinicia ahora:\"
-echo \"   sudo reboot\"
+echo ""
+echo "✅ Script finalizado."
+echo "⚠️ Si es la primera vez que habilitas SPI, reinicia antes de repetir el test:"
+echo "   sudo reboot"
