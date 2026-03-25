@@ -56,7 +56,7 @@ fi
 
 cd "$EXAMPLES_DIR"
 
-# Test fijo que quieres ejecutar
+# Test fijo
 TEST_FILE="epd_2in13_V4_test.py"
 
 if [ ! -f "$TEST_FILE" ]; then
@@ -69,9 +69,9 @@ if [ ! -f "$TEST_FILE" ]; then
 fi
 
 echo "[OK] Test encontrado: $TEST_FILE"
-echo "[INFO] Ejecutando test Waveshare..."
+echo "[INFO] Ejecutando test Waveshare con sudo..."
 
-python3 "$TEST_FILE"
+sudo python3 "$TEST_FILE"
 
 echo
 echo "[OK] Test finalizado."
