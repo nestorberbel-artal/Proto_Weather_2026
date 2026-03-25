@@ -57,7 +57,7 @@ fi
 cd "$EXAMPLES_DIR"
 
 # Test fijo que quieres ejecutar
-TEST_FILE="epd_2in13_V2_test.py"
+TEST_FILE="epd_2in13_V4_test.py"
 
 if [ ! -f "$TEST_FILE" ]; then
     echo "[ERROR] No existe el test esperado:"
